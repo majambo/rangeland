@@ -1,0 +1,122 @@
+---
+title: "biomass"
+author: "Majambo Gamoyo"
+date: "2023-11-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library("PerformanceAnalytics")
+library(sf)
+#install.packages('spgwr')
+library(spgwr)
+```
+
+```{r}
+## Loading and cleaning soil moisture, NDVI, rainfall (total and mean) data
+soilm = read.csv('soilm.csv')
+soilm <- soilm %>%
+  filter(Year >= "2010")
+soilm = subset(soilm, select = -c(X))
+
+veg = read.csv('vegetation.csv')
+veg = subset(veg, select = -c(X, NDVI, EVI))
+veg <- veg %>%
+  filter(Year >= "2010")
+
+ptot = read.csv('ptot.csv')
+ptot = subset(ptot, select = -c(X))
+ptot <- ptot %>%
+  filter(Year >= "2010" & Year <= "2022")
+
+pmean = read.csv('pmean.csv')
+pmean = subset(pmean, select = -c(X))
+pmean <- pmean %>%
+  filter(Year >= "2010" & Year <= "2022")
+
+
+list_df = list(ptot,soilm, veg)
+combined_df = as.data.frame(list_df)
+combined_df1 = subset(combined_df, select = c(Lon,Lat,Year,Month,PTOT,SM,scaled_ndvi,scaled_evi))
+colnames(combined_df1) <- c('Lon','Lat','Year','Month','ptot','sm','ndvi','evi')
+summary(combined_df1)
+
+```
+
+```{r}
+#Visualization of a Correlation Matrix.
+#combined_df2 = subset(combined_df1, select = c('ptot','sm','ndvi','evi'))
+#chart.Correlation(combined_df2, histogram=TRUE, pch=19)
+```
+
+```{r}
+#Select year 2020 to 2022 and season (MAM and SON)
+combined_df3 <- combined_df1 %>%
+  filter(Year >= "2020" & Year <= "2022")
+
+MAM.Season <- combined_df3 %>%
+  filter(between(Month,3,5))
+MAM.Season2 = subset(MAM.Season, select = c('ptot','sm','ndvi','evi'))
+#chart.Correlation(MAM.Season2, histogram=TRUE, pch=19)
+
+SON.Season <- combined_df1 %>%
+  filter(between(Month,9,12))
+SON.Season2 = subset(SON.Season, select = c('ptot','sm','ndvi','evi'))
+#chart.Correlation(SON.Season2, histogram=TRUE, pch=19)
+```
+
+
+```{r}
+#Run linear model to understand the global relationship between our variables in our study area.
+#Dependent variable: NDVI
+#Independent (predictor) variables: the percentages of unemployed economically active adults and White British ethnicity
+model <- lm(ndvi ~ ptot + sm, data = MAM.Season)
+summary(model)
+```
+
+```{r}
+#Model diagnostics
+#par(mfrow=c(2,2))
+#plot(model)
+```
+
+```{r}
+#To run gwr model we need to convert the data.frame to spatial
+MAM.Season3 <- st_as_sf(x = MAM.Season, 
+                        coords = c("Lon", "Lat"),
+                        crs = "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0")
+MAM.Season3 <- as(MAM.Season3, "Spatial")
+```
+
+```{r}
+#Calculate the kernel bandwidth for a given geographically weighted regression then run GWR model. 
+gwr.b <- gwr.sel(ndvi ~ ptot + sm, data = MAM.Season3, adapt = T)
+```
+
+```{r}
+#Run the GWR model for specific season
+mam.model = gwr(ndvi ~ ptot + sm, data = MAM.Season3, adapt= gwr.b, hatmatrix=TRUE, se.fit=TRUE)
+
+#Prints gwr results
+mam.model
+```
+
+```{r}
+#Create results dataframe
+mam.model.results <-as.data.frame(mam.model$SDF)
+mam.model.results2 <- cbind(MAM.Season3, as.matrix(mam.model.results))
+mam.model.results3 <- st_as_sf(mam.model.results2)
+head(mam.model.results3)
+```
+```{r}
+#Output from the prediction model is converted to pasture biomass using this equation Pasture biomass = (6480·2 * Pred) - 958·6
+mam.model.results3$Pasturebiomass = ((6480.2*mam.model.results3$pred)-958.6)/1000
+head(mam.model.results3)
+```
